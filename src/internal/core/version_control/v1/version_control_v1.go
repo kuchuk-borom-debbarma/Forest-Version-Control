@@ -49,6 +49,42 @@ func (v *VersionControlV1) Init(repoName string, author string) error {
 }
 
 func (v *VersionControlV1) Commit(message string, author string, files []string) error {
+	if len(files) == 0 {
+		return errors.New("no files to commit")
+	}
+
+	// Wildcard commit
+	if len(files) == 1 && files[0] == "*" {
+		log.Println("Wildcard commit detected. Tracking all files excluding the ones in .mrvcignore")
+
+		allFiles, err := fs.ListFilesExcludingIgnore(fs.GetCurrentDir())
+		if err != nil {
+			return err
+		}
+
+		// Normalize paths
+		normalized := make([]string, 0, len(allFiles))
+		for _, f := range allFiles {
+			normalized = append(normalized, fs.NormalizePath(f))
+		}
+
+		files = normalized
+
+	} else {
+		// validate files exist (with normalization)
+		for i, f := range files {
+			norm := fs.NormalizePath(f)
+			files[i] = norm
+
+			if !fs.FileExists(norm) {
+				return errors.New("file does not exist: " + f)
+			}
+		}
+	}
+	log.Println("Committing files:", files)
+
+	// For each file:- 1. Store its directory + parent directory, store the hash and content, save them and create the blob and tree. Also track the root tree i.e root dir
+
 	return nil
 }
 
