@@ -1,8 +1,11 @@
 package fs
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -190,4 +193,22 @@ func NormalizePath(p string) string {
 	// Clean redundant components, then convert all separators to "/"
 	clean := filepath.Clean(abs)
 	return filepath.ToSlash(clean)
+}
+
+func CalculateFileHash(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	hasher := sha256.New()
+
+	// Copy file content into the hasher
+	if _, err := io.Copy(hasher, file); err != nil {
+		return "", err
+	}
+
+	// Generate final hex-encoded hash string
+	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
