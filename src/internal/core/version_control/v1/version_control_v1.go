@@ -60,7 +60,11 @@ func (v *VersionControlV1) Commit(message string, author string, files []string)
 	// Wildcard "*" → commit all files
 	// -----------------------------
 	if len(files) == 1 && files[0] == "*" {
-		all, err := fs.ListFilesExcludingIgnore(repoRoot)
+		all, err := fs.ListFiles(repoRoot, fs.WalkOptions{
+			IgnoreMRVC:          true,
+			IgnoreNestedRepos:   true, // IMPORTANT
+			ApplyIgnorePatterns: true,
+		})
 		if err != nil {
 			return err
 		}
@@ -296,7 +300,11 @@ func (v *VersionControlV1) Status() (string, error) {
 	// ------------------------------------------------------
 	// Scan working directory
 	// ------------------------------------------------------
-	workingFiles, err := fs.ListFilesExcludingIgnore(repoRoot)
+	workingFiles, err := fs.ListFiles(repoRoot, fs.WalkOptions{
+		IgnoreMRVC:          true,
+		IgnoreNestedRepos:   true,
+		ApplyIgnorePatterns: true,
+	})
 	if err != nil {
 		return "", err
 	}

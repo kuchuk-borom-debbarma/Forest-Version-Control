@@ -142,33 +142,59 @@ func IsIgnored(rootDir, path string, patterns []string) bool {
 	return false
 }
 
-// ListFilesExcludingIgnore returns all files except ignored.
-func ListFilesExcludingIgnore(rootDir string) ([]string, error) {
-	patterns, _ := LoadIgnore(rootDir)
+// WalkOptions defines optional scanning behavior.
+type WalkOptions struct {
+	IgnoreMRVC          bool // ignore the root repo's .mrvc folder
+	IgnoreNestedRepos   bool // ignore nested repos (folders containing their own .mrvc)
+	ApplyIgnorePatterns bool // apply .mrvcignore rules
+}
 
+// ListFiles returns files respecting the given walk options.
+func ListFiles(rootDir string, opts WalkOptions) ([]string, error) {
 	var files []string
+	var patterns []string
+
+	if opts.ApplyIgnorePatterns {
+		patterns, _ = LoadIgnore(rootDir)
+	}
 
 	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
 		}
 
-		// Skip the .mrvc system folder
-		if strings.Contains(path, "/.mrvc") {
+		// ------------------------------------------------
+		// 1. Skip .mrvc folder of *this* repo
+		// ------------------------------------------------
+		if opts.IgnoreMRVC && strings.Contains(path, "/.mrvc") {
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
-		// Skip ignored paths
-		if IsIgnored(rootDir, path, patterns) {
+		// ------------------------------------------------
+		// 2. Skip nested repos -> any folder with its own .mrvc
+		// ------------------------------------------------
+		if opts.IgnoreNestedRepos && info.IsDir() {
+			if IsDirPresent(filepath.Join(path, ".mrvc")) {
+				return filepath.SkipDir
+			}
+		}
+
+		// ------------------------------------------------
+		// 3. Apply ignore patterns from .mrvcignore
+		// ------------------------------------------------
+		if opts.ApplyIgnorePatterns && IsIgnored(rootDir, path, patterns) {
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
+		// ------------------------------------------------
+		// 4. Collect files only
+		// ------------------------------------------------
 		if !info.IsDir() {
 			files = append(files, path)
 		}
