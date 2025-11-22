@@ -1,321 +1,294 @@
 
 # 📘 MultiRepo VC — Architecture & Roadmap
 
-*A Snapshot-Based Version Control System With Nested Repository Support*
+*A Snapshot-Based Version Control System With Nested Repository Support (Planned)*
+*(Updated based on current implementation)*
 
 ---
 
-# 📍 Roadmap Overview
+# 📍 Overview
 
-MultiRepo VC is built on a **snapshot-per-commit** model, where each commit represents a complete snapshot of the project directory at that point in time.
+MultiRepo VC is a **snapshot-based version control system**.
+Each commit captures a complete tree of directory structures and file contents at commit time.
 
-The overall project roadmap:
+Key characteristics:
 
-1. **Implement Commit Snapshot Model**
+* **No staging area**
+* **Content-addressed objects** (SHA-256)
+* **Tree-based snapshots**
+* **Simple CLI commands**
+* **Selective file commits (explicit list only)**
+* `"*"` wildcard allows *commit everything*
+* `.mrvcignore` exclusion system
 
-    * Blob objects
-    * Tree objects
-    * Commit objects
-    * Content-addressed storage backend
-    * Selective commit (no staging area)
-
-2. **Implement Nested Repository Support**
-
-    * Allow repositories inside repositories
-    * Maintain tree isolation and reference semantics
-    * Provide controlled linking of sub-repos
-
-3. **Implement Optimization Layer**
-
-    * Optional diff storage (delta compression)
-    * Periodic snapshot packing (similar to Git packfiles)
-    * History compaction/cleanup
-
-This layered approach ensures a solid foundation before advanced optimizations.
+Pattern-based commits (e.g., `src/*.go`) are **not supported yet** and appear only in the roadmap.
 
 ---
 
 # 🧭 Design Philosophy
 
-MultiRepo VC follows three core principles:
+### 1. **Immutable Object Storage**
 
-### 1. **Immutable Objects**
+* Blobs, trees, and commits are hashed using pure SHA-256 of their serialized content.
+* Changing content produces new hashes → new objects → new snapshot.
 
-Every blob, tree, and commit is content-addressed and immutable.
+### 2. **No Staging Area**
 
-> Changing the content produces a new hash → new object → new snapshot.
+Current commit modes:
 
-### 2. **Staging-less Workflow**
+* `mrvc commit --message="msg" --files file1 file2`
+* `mrvc commit --message="msg" --files *`
 
-There is **no staging area**.
-Commits operate directly on the **working directory**, making the system easier to reason about.
+File selection is explicit.
+Pattern matching is a future feature.
 
-Users can:
+### 3. **Directory Snapshot Model**
 
-* commit everything (`mrvc commit .`)
-* commit **specific** files or patterns (`mrvc commit README.md src/*.go docs/**`)
+Each commit stores a complete **tree of directory objects** representing the state of the repository.
 
-### 3. **Directory Snapshot Trees**
+Trees are:
 
-Each commit stores a **tree of trees** representing the entire repository structure.
+* Built bottom-up
+* Deterministically ordered
+* Content-hashed after serialization
 
 ---
 
 # 📝 Repository Initialization
 
-When initializing a new repository:
+`mrvc init --name <repoName> --author <author>`
 
-### 📂 `.mrvc/` folder is created:
+Creates:
 
 ```
 .mrvc/
-  HEAD
   metadata.json
+  HEAD
   objects/
 ```
 
-### 📌 Components
+### `metadata.json`
 
-#### **`metadata.json`**
+Matches actual code ():
 
 ```json
 {
-  "repoName": "MyProject",
-  "createdAt": 1732211000,
-  "formatVersion": 1
+  "name": "MyRepo",
+  "author": "Kuku",
+  "created_at": "1732211000"
 }
 ```
 
-#### **`HEAD`**
+### `HEAD`
+
+Initially empty:
 
 ```
-commit: null
+<empty>
 ```
 
-Repository starts with no commits.
+### `objects/`
 
-#### **`objects/`**
-
-Initially empty.
-Later stores:
-
-* blob objects
-* tree objects
-* commit objects
-
-Each stored using a **split-path hash layout**:
+Stores all blobs, trees, and commits:
 
 ```
-objects/ac/42f3d1e3ab...
+objects/<first2>/<remaining>
 ```
 
 ---
 
 # 📦 Blob Objects
 
-A **blob** holds file contents exactly as-is.
+Blobs contain **raw file bytes** exactly as read.
 
-### Storage path:
-
-```
-objects/ac/42f3...
-```
-
-### Blob representation:
+Hashing:
 
 ```
-<raw file bytes>
+sha256(fileBytes)
 ```
 
-### Hashing:
+Storage:
 
 ```
-sha256(file bytes)
+.mrvc/objects/ab/cdef1234...
 ```
 
 ---
 
 # 🌳 Tree Objects
 
-A **tree** describes one directory.
+A tree represents a directory.
 
-### A tree contains:
-
-* file → blob reference
-* subdirectory → tree reference
-* future: nested repository reference
-
-### Example:
+Updated actual format ():
 
 ```json
 {
-  "type": "tree",
   "entries": [
-    { "name": "README.md", "type": "blob", "hash": "a1b2..." },
-    { "name": "src", "type": "tree", "hash": "d4e5..." }
+    { "name": "main.go", "entry_type": "blob", "hash": "..." },
+    { "name": "src", "entry_type": "tree", "hash": "..." }
   ]
 }
 ```
 
-### Hashing:
+### Bottom-up Construction (Actual Behavior)
 
-1. Serialize tree in stable format
-2. Compute SHA256
-3. Store under `.mrvc/objects/<hash>`
+The implementation:
+
+* Tracks each directory touched by committed files.
+* Ensures all parent directories exist.
+* Sorts directories by depth (deep → shallow).
+* Adds subtree entries after hashing children.
+* Sorts entries alphabetically to guarantee deterministic hashing.
 
 ---
 
 # 🔗 Commit Objects
 
-A commit stores:
-
-* root tree hash
-* parent commit hash
-* message
-* timestamp
-
-### Example:
+Actual commit format ():
 
 ```json
 {
-  "type": "commit",
-  "tree": "88cc...",
-  "parents": ["72fa..."],
-  "message": "Initial commit",
-  "author": "User",
-  "timestamp": 1732212000
+  "tree": "rootTreeHash",
+  "parent": "previousCommitHash or empty",
+  "message": "Commit message",
+  "author": "Author",
+  "timestamp": "1732212000"
 }
 ```
 
-Stored as:
+Differences from conceptual doc:
+
+* `parent` is a **single string**, not a list.
+* Commit JSON does **not** include `"type": "commit"`.
+* Timestamp is stored as **stringified milliseconds**.
+
+Storage:
 
 ```
-objects/88/cc....
+objects/ab/cdef123...
 ```
 
 ---
 
-# 🧱 Commit Model (No Staging)
+# 🧱 Commit Model (Current Behavior)
 
-MultiRepo VC supports **two types of commits**:
-
----
-
-## ⭐ 1. `mrvc commit .` → Commit EVERYTHING
-
-This creates a full snapshot of the entire working directory:
-
-1. Walk every file (except ignored)
-2. Hash contents
-3. Write blob objects
-4. Build directory trees
-5. Build commit object
-6. Update HEAD
-
-Equivalent to Git’s “commit all changes” but without staging.
+Two modes:
 
 ---
 
-## ⭐ 2. `mrvc commit <files|patterns>` → Selective Commit
+## 1. **Explicit file commit**
 
-Users can commit a **subset of files**, defined by paths or wildcards:
+Example:
+
+```
+mrvc commit --message="update" --files src/main.go README.md
+```
+
+Behavior:
+
+* Paths are normalized to absolute.
+* Each file must exist (no globbing).
+* Only listed files are included in the snapshot.
+* Parent directories are ensured automatically.
+
+Unlisted files:
+
+* Are **not included**, unless `"*"` is used.
+
+---
+
+## 2. `"*"` → Commit entire repository
+
+```
+mrvc commit --message="all" --files *
+```
+
+Behavior:
+
+* Runs `ListFilesExcludingIgnore()` ()
+* Reads `.mrvcignore` rules
+* Excludes system folder `.mrvc`
+
+This is the only wildcard currently supported.
+
+---
+
+# 🧾 Ignore System
+
+`.mrvcignore` supports simple patterns:
+
+* `*.ext`
+* `prefix*`
+* `folder/`
+* exact matches
+
+These are implemented in `IsIgnored()` ().
+
+---
+
+# 🔨 CLI Command System
+
+Commands are registered dynamically via `init()` in each command file.
+
+Current commands:
+
+* `init`
+* `commit`
+
+### Argument Model
+
+The parser supports:
+
+* `--key value1 value2`
+* `--key=value`
+* `--flag` (boolean)
+* positional arguments
+
+Stored as `map[string][]string`.
+
+---
+
+# 🏗️ Roadmap (Planned Features)
+
+These were in the original conceptual doc but **not yet implemented in code**.
+
+### 1. **Pattern-Based Selective Commits**
 
 Examples:
 
 ```
-mrvc commit README.md
-mrvc commit src/*.java
-mrvc commit docs/** src/**/*.go
+mrvc commit src/*.go
+mrvc commit docs/** src/**/*.java
 ```
 
-### Internal steps:
+Requires:
 
-1. Load parent commit snapshot
-2. Resolve file patterns into actual file paths
-3. For each selected file:
+* Full globbing engine
+* Pattern → path resolution logic
+* Integration with ignore rules
 
-    * Read working directory content
-    * Hash and write blob
-    * Replace corresponding entries inside parent tree
-4. If selected files no longer exist → treat as deletion
-5. Unselected files remain unchanged (inherited from parent snapshot)
-6. Build new commit tree
-7. Write commit object
-8. Update HEAD
+### 2. **Nested Repository Support**
 
-This allows **partial commits** without the complexity of a staging index.
+Allow directories to act as independent sub-repositories.
 
----
+Planned behaviors:
 
-# 🔄 Rename / Move Handling
+* Tree isolation
+* Cross-references between repos
+* Selective linking of history
 
-Because commit selection uses **paths evaluated at commit time**, renames are naturally handled:
+### 3. **Multi-parent Commits**
 
-* If a selected path no longer exists → deletion
-* If a wildcard matches a new location → updated content is committed
-* No tracking IDs or staging needed
+Support merges:
 
-This keeps the system intuitive and predictable.
+```
+"parents": ["hash1", "hash2"]
+```
 
----
+### 4. **Delta Compression**
 
-# 📐 Full Commit Algorithm (Unified)
+Store diffs for large unchanged files.
 
-Regardless of commit mode:
+### 5. **Packfile System**
 
-1. Load parent commit’s tree (if exists)
-2. Determine which files to read:
-
-    * ALL for `commit .`
-    * SELECTED for `commit patterns`
-3. Read file content
-4. Compute blob hashes
-5. Build or update trees
-6. Write new commit object
-7. Update `HEAD`
-
----
-
-# 🧩 Why Snapshot Model First?
-
-Snapshot-based commits:
-
-* Are simple to reason about
-* Enable fast diffs
-* Are easy to revert
-* Enable nested repository design
-* Avoid staging/index complexities
-* Provide structural persistence
-
-Diffing and delta compression can come later.
-
----
-
-# 🌀 Future Optimizations
-
-### 🟧 Delta Compression
-
-Store diffs for large files or repeated content.
-
-### 🟦 Periodic Packfiles
-
-Compact objects for performance and size savings.
-
-### 🟩 Nested Repository Support
-
-Allow directories to embed sub-repositories with independent histories.
-
----
-
-# 🎉 Final Summary
-
-MultiRepo VC provides:
-
-* **Simple, staging-less workflow**
-* **Full or selective commits via patterns**
-* **Immutable object storage**
-* **Tree-based directory snapshots**
-* **Easy revert + predictable behavior**
-* **Extensible base for nested repos and diffs**
-
-This architecture is clean, modern, and far easier to maintain than a Git-like index system while still supporting partial commits.
+Periodically compress object store.
