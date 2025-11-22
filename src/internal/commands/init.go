@@ -1,38 +1,28 @@
 package commands
 
 import (
-	"errors"
-
 	v1 "MultiRepoVC/src/internal/core/version_control/v1"
-	"MultiRepoVC/src/internal/utils/arg"
 )
 
-type InitCommand struct{}
-
-func (c *InitCommand) Name() string {
-	return "init"
+type InitCommand struct {
+	BaseCommand
 }
 
-func (c *InitCommand) Execute(args []string) error {
-	parsedArgs := arg.ParseArgs(args)
+func (c *InitCommand) Name() string { return "init" }
+func (c *InitCommand) Description() string {
+	return "Initializes a new MRVC repository."
+}
+func (c *InitCommand) RequiredArgs() []string { return []string{"name", "author"} }
+func (c *InitCommand) OptionalArgs() []string { return []string{} }
 
-	// 1. Validate required arguments
-	name, ok := parsedArgs["name"]
-	if !ok || name == "" {
-		return errors.New("missing required argument: --name")
-	}
+func (c *InitCommand) ExecuteCommand(p map[string][]string) error {
+	name := p["name"][0]
+	author := p["author"][0]
 
-	author, ok := parsedArgs["author"]
-	if !ok || author == "" {
-		return errors.New("missing required argument: --author")
-	}
-
-	// 2. Execute VC Init
 	vc := v1.New()
 	return vc.Init(name, author)
 }
 
-// auto-register this command
 func init() {
-	Register(&InitCommand{})
+	Global.Register(&InitCommand{})
 }

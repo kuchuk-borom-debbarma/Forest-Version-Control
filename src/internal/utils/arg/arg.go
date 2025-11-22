@@ -1,78 +1,57 @@
 package arg
 
-// ParseArgs converts CLI args into a key-value map.
+import "strings"
+
+// ParseArgs converts CLI args into a key → []values map.
+//
 // Supports:
 //
-// mrvc init --name=test --author="kuku"
-// mrvc commit --msg "hello" file1 file2
-func ParseArgs(args []string) map[string]string {
-	parsed := make(map[string]string)
+//	--key value1 value2 value3
+//	--flag
+//	positional values
+//	--key=value
+//
+// All non-flag values following a flag are grouped under it
+// until the next --flag is found.
+func ParseArgs(args []string) map[string][]string {
+	result := make(map[string][]string)
 
-	positionalIndex := 0
+	currentKey := "positional"
 
 	for i := 0; i < len(args); i++ {
-		arg := args[i]
+		token := args[i]
 
-		// --key=value
-		if len(arg) > 2 && arg[:2] == "--" && contains(arg, "=") {
-			parts := split(arg[2:], "=")
-			parsed[parts[0]] = parts[1]
+		// Case: --key=value
+		if strings.HasPrefix(token, "--") && strings.Contains(token, "=") {
+			parts := strings.SplitN(token[2:], "=", 2)
+			key := parts[0]
+			value := parts[1]
+
+			result[key] = append(result[key], value)
+			currentKey = key
 			continue
 		}
 
-		// --flag or --key value
-		if len(arg) > 2 && arg[:2] == "--" {
-			key := arg[2:]
+		// Case: --flag or --key
+		if strings.HasPrefix(token, "--") {
+			key := token[2:]
 
-			// Check next token
-			if i+1 < len(args) && !isFlag(args[i+1]) {
-				parsed[key] = args[i+1]
-				i++
-			} else {
-				// flag without value
-				parsed[key] = "true"
+			// Next item is a value unless it is another flag
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
+				// Assign upcoming values to this key
+				currentKey = key
+				continue
 			}
+
+			// No value → treat as boolean flag
+			result[key] = append(result[key], "true")
+			currentKey = key
 			continue
 		}
 
-		// positional argument
-		parsed[string(rune(positionalIndex))] = arg
-		positionalIndex++
+		// Case: a non-flag value → belongs to currentKey
+		result[currentKey] = append(result[currentKey], token)
 	}
 
-	return parsed
-}
-
-// helpers -----------------------------
-
-func contains(s, substr string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] == substr[0] {
-			return true
-		}
-	}
-	return false
-}
-
-func split(s, sep string) []string {
-	out := make([]string, 2)
-	idx := -1
-	for i := 0; i < len(s); i++ {
-		if string(s[i]) == sep {
-			idx = i
-			break
-		}
-	}
-	if idx == -1 {
-		out[0] = s
-		out[1] = ""
-		return out
-	}
-	out[0] = s[:idx]
-	out[1] = s[idx+1:]
-	return out
-}
-
-func isFlag(s string) bool {
-	return len(s) > 2 && s[:2] == "--"
+	return result
 }

@@ -2,5 +2,10 @@ package commands
 
 type Command interface {
 	Name() string
-	Execute(args []string) error
+	Description() string
+	RequiredArgs() []string
+	OptionalArgs() []string
+
+	// ExecuteCommand parsed: key → []values
+	ExecuteCommand(parsed map[string][]string) error
 }
