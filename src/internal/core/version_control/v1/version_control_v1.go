@@ -483,3 +483,122 @@ func (v *VersionControlV1) Link(childPath string) error {
 
 	return nil
 }
+
+// ======================================================================
+// SUPER COMMIT
+// ======================================================================
+
+func (v *VersionControlV1) SuperCommit(message string, author string) error {
+	repoRoot := fs.GetCurrentDir()
+
+	// 1. Load own HEAD (self snapshot)
+	selfHead := readHEAD()
+	if selfHead == "" {
+		return errors.New("cannot create super commit: no commits yet in this repo")
+	}
+
+	// 2. Load children.json
+	childrenPath := filepath.Join(repoRoot, ".mrvc", childrenFileName)
+	cf := model.ChildrenFile{Children: []model.ChildEntry{}}
+
+	if fs.FileExists(childrenPath) {
+		data, err := os.ReadFile(childrenPath)
+		if err != nil {
+			return fmt.Errorf("failed to read children.json: %w", err)
+		}
+		if err := json.Unmarshal(data, &cf); err != nil {
+			return fmt.Errorf("invalid children.json: %w", err)
+		}
+	}
+
+	// 3. Resolve each child
+	childRefs := make([]model.SuperCommitChildRef, 0)
+
+	for _, child := range cf.Children {
+		childAbs := filepath.Join(repoRoot, child.Path)
+		childMrvc := filepath.Join(childAbs, ".mrvc")
+
+		// Validate MRVC folder
+		if !fs.IsDirPresent(childMrvc) {
+			return fmt.Errorf("child repo missing or corrupted: %s", child.Path)
+		}
+
+		// Validate repoName identity
+		var meta model.Metadata
+		if err := fs.ReadJSON(filepath.Join(childMrvc, "metadata.json"), &meta); err != nil {
+			return fmt.Errorf("failed to read metadata for child '%s'", child.Path)
+		}
+
+		if meta.Name != child.RepoName {
+			return fmt.Errorf("repo identity mismatch for '%s': expected '%s', found '%s'",
+				child.Path, child.RepoName, meta.Name)
+		}
+
+		// Read child's HEAD + HEAD_SUPER
+		childHead := func() string {
+			data, err := os.ReadFile(filepath.Join(childMrvc, "HEAD"))
+			if err != nil {
+				return ""
+			}
+			return strings.TrimSpace(string(data))
+		}()
+
+		childSuper := func() string {
+			data, err := os.ReadFile(filepath.Join(childMrvc, "HEAD_SUPER"))
+			if err != nil {
+				return ""
+			}
+			return strings.TrimSpace(string(data))
+		}()
+
+		if childHead == "" {
+			return fmt.Errorf("child repo '%s' has no commits", child.Path)
+		}
+
+		// Resolve snapshot reference
+		ref := ""
+		refType := ""
+
+		if childSuper != "" {
+			ref = childSuper
+			refType = "super"
+		} else {
+			ref = childHead
+			refType = "commit"
+		}
+
+		childRefs = append(childRefs, model.SuperCommitChildRef{
+			Path:     child.Path,
+			RepoName: child.RepoName,
+			Ref:      ref,
+			Type:     refType,
+		})
+	}
+
+	// 4. Build super commit object
+	superObj := model.SuperCommitObject{
+		SelfHead:  selfHead,
+		Children:  childRefs,
+		Message:   message,
+		Author:    author,
+		Timestamp: strconv.FormatInt(time.GetCurrentTimestamp(), 10),
+	}
+
+	// 5. Hash and save
+	hash, jsonBytes, err := HashSuperCommit(superObj)
+	if err != nil {
+		return err
+	}
+
+	if err := SaveObject(hash, jsonBytes); err != nil {
+		return err
+	}
+
+	// 6. Update HEAD_SUPER
+	if err := updateHEADSUPER(hash); err != nil {
+		return err
+	}
+
+	log.Println("Super commit created:", hash)
+	return nil
+}

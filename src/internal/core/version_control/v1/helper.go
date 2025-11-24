@@ -124,3 +124,24 @@ func flattenTree(repoRoot, prefix string, tree model.TreeObject, out map[string]
 	}
 	return nil
 }
+
+func HashSuperCommit(sc model.SuperCommitObject) (string, []byte, error) {
+	jsonBytes, err := json.Marshal(sc)
+	if err != nil {
+		return "", nil, err
+	}
+	h := sha256.Sum256(jsonBytes)
+	return hex.EncodeToString(h[:]), jsonBytes, nil
+}
+
+func readHEADSUPER() string {
+	data, err := os.ReadFile(".mrvc/HEAD_SUPER")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func updateHEADSUPER(hash string) error {
+	return os.WriteFile(".mrvc/HEAD_SUPER", []byte(strings.TrimSpace(hash)), 0644)
+}
