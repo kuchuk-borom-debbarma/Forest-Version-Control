@@ -25,11 +25,20 @@ go build -o build/mrvc ./src/cmd/mrvc
 echo "📁 Creating sensible testRepo..."
 
 TEST_REPO="build/testRepo"
+SUB_REPO="$TEST_REPO/subRepo"
+
 mkdir -p "$TEST_REPO/internal/math"
 mkdir -p "$TEST_REPO/pkg/greetings"
 mkdir -p "$TEST_REPO/assets"
 
-# .mrvcignore
+# Move built mrvc into testRepo root
+cp build/mrvc "$TEST_REPO/mrvc"
+
+
+# -------------------------------
+# Create .mrvcignore
+# -------------------------------
+
 cat > "$TEST_REPO/.mrvcignore" <<EOF
 # Ignore build artifacts
 build/
@@ -45,14 +54,16 @@ vendor/
 .DS_Store
 EOF
 
-# README.md
+# -------------------------------
+# Create sample files
+# -------------------------------
+
 cat > "$TEST_REPO/README.md" <<EOF
 # TestRepo
 
 A small example Go project used for testing the MultiRepoVC version control system.
 EOF
 
-# app.go
 cat > "$TEST_REPO/app.go" <<EOF
 package main
 
@@ -69,7 +80,6 @@ func main() {
 }
 EOF
 
-# internal/math/add.go
 cat > "$TEST_REPO/internal/math/add.go" <<EOF
 package math
 
@@ -78,7 +88,6 @@ func Add(a, b int) int {
 }
 EOF
 
-# internal/math/multiply.go
 cat > "$TEST_REPO/internal/math/multiply.go" <<EOF
 package math
 
@@ -87,7 +96,6 @@ func Multiply(a, b int) int {
 }
 EOF
 
-# pkg/greetings/hello.go
 cat > "$TEST_REPO/pkg/greetings/hello.go" <<EOF
 package greetings
 
@@ -96,10 +104,66 @@ func Hello(name string) string {
 }
 EOF
 
-# assets/sample.txt
 cat > "$TEST_REPO/assets/sample.txt" <<EOF
 This is a sample asset file for snapshot testing with MultiRepoVC.
 EOF
 
-echo "✅ testRepo created at build/testRepo/"
-echo "🎉 Build complete: build/mrvc"
+echo "📁 TestRepo created."
+
+# ================================================================================
+# CREATE NESTED REPO
+# ================================================================================
+
+echo "📁 Creating nested MRVC repository inside testRepo/subRepo..."
+
+mkdir -p "$SUB_REPO"
+
+# Move mrvc binary into nested repo
+cp build/mrvc "$SUB_REPO/mrvc"
+
+# Initialize nested repo structure
+mkdir -p "$SUB_REPO/src"
+mkdir -p "$SUB_REPO/assets"
+
+cat > "$SUB_REPO/README.md" <<EOF
+# SubRepo
+
+A nested MRVC repository inside TestRepo.
+Used to test hierarchical versioning.
+EOF
+
+cat > "$SUB_REPO/src/module.go" <<EOF
+package src
+
+func SubValue() int {
+    return 42
+}
+EOF
+
+cat > "$SUB_REPO/assets/info.txt" <<EOF
+This is a nested repo asset inside subRepo.
+EOF
+
+# Create subRepo .mrvcignore
+cat > "$SUB_REPO/.mrvcignore" <<EOF
+*.tmp
+ignore-this/
+EOF
+
+echo "📁 Initializing both repos with mrvc..."
+
+# Initialize parent repo
+(
+    cd "$TEST_REPO"
+    ./mrvc init testRepo "Builder Script"
+)
+
+# Initialize child repo
+(
+    cd "$SUB_REPO"
+    ./mrvc init subRepo "Builder Script"
+)
+
+echo "🎉 Nested repository created at: $SUB_REPO"
+echo "🎉 MRVC binary copied into both repos"
+echo "🎉 Build complete!"

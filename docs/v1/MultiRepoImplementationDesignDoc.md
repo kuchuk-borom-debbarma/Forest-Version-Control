@@ -1,80 +1,100 @@
 
 # 📘 MRVC Hierarchical Versioning — Implementation Design Document
 
-*(Based on current codebase + finalized design decisions)*
-
+*(Finalized Architecture & Implementation Plan)*
 
 ---
 
 # 1. Overview
 
-MRVC is a **snapshot-based version control system** with support for **hierarchical repositories** ("nested repos").
-Each repo manages its own snapshots, and higher-level repos can create **super commits** that reference the stable snapshots of their direct children.
+MRVC is a **snapshot-based version control system** that supports **hierarchical, nested repositories**.
+Each repository is fully independent but can link other MRVC repositories as **direct children**.
 
-This allows teams to independently version their repos and provide stable integration points to parent repos.
+MRVC provides:
+
+* **Normal commits**, generating `HEAD`
+* **Super commits**, generating `HEAD_SUPER`
+* **Stable hierarchical snapshots**, representing the repo + its direct children's stable snapshots
+* **children.json**, representing the *working topology*
+* **Super commit objects**, representing *versioned topology*
+
+This design allows independent teams to work in isolated repos while offering stable integration points through super commits.
 
 This document describes:
 
-* How hierarchy is structured
-* How linking is stored
-* How child super commits are resolved
-* How parent super commits are created
-* What errors/warnings should occur
-* How this integrates with existing commit logic
-* New files, structures, and algorithms to add
+* Repository structure
+* Linking child repositories
+* children.json behavior
+* Super commit behavior
+* Strict vs. default snapshot modes
+* Non-recursive hierarchical behavior
+* Integration with current commit workflow
+* Error handling and warnings
 
 ---
 
-# 2. Repo Structure Extensions
+# 2. Repository Structure
 
-Each MRVC repo currently stores:
-
-```
-.mrvc/
-  HEAD
-  metadata.json
-  objects/
-```
-
-We will extend this with:
+Every MRVC repository contains:
 
 ```
 .mrvc/
-  HEAD_SUPER          <-- NEW: pointer to last super commit (optional)
-  children.json       <-- NEW: list of direct child repos
+  HEAD                ← Latest normal commit (local snapshot)
+  HEAD_SUPER          ← Latest super commit (stable snapshot)
+  metadata.json       ← Repo metadata
+  children.json       ← List of direct child repos (working topology)
+  objects/            ← All MRVC objects (blobs, trees, commits, super commits)
 ```
 
-### 2.1 children.json format
+### 2.1 children.json Format
+
+This file defines the **current working hierarchy** (not versioned).
 
 ```json
 {
   "children": [
-    "path/to/childA",
-    "path/to/childB"
+    "childA",
+    "libs/api",
+    "packages/frontend"
   ]
 }
 ```
 
-Paths must be:
+Rules:
 
-* relative to parent repo root
-* normalized forward-slash format
-* validated to contain `.mrvc/` (i.e., a valid MRVC repo)
+* Paths must be **relative** to parent repo root
+* Paths must use **forward slashes**
+* Each child must be a valid MRVC repository (`.mrvc` folder + `metadata.json`)
+
+children.json is **not part of a commit**, but **super commits snapshot it**.
 
 ---
 
 # 3. Super Commit Object Format
 
-A super commit represents a **stable snapshot** of a repo AND its direct children.
+A super commit describes:
 
-### SuperCommitObject JSON:
+* The repo's own HEAD at that time
+* The exact list of children that existed at that time
+* The snapshot (HEAD_SUPER or HEAD) selected from each child
+* The stable topology for checkouts
+
+### JSON Structure
 
 ```json
 {
   "self_head": "<commit-hash>",
   "children": [
-    { "path": "childA", "ref": "<child-super-or-head>", "type": "super" },
-    { "path": "childB", "ref": "<child-super-or-head>", "type": "commit" }
+    {
+      "path": "childA",
+      "ref": "<hash>",
+      "type": "super"
+    },
+    {
+      "path": "childB",
+      "ref": "<hash>",
+      "type": "commit"
+    }
   ],
   "message": "Stable snapshot",
   "author": "Author",
@@ -82,186 +102,207 @@ A super commit represents a **stable snapshot** of a repo AND its direct childre
 }
 ```
 
-### Notes
+Meaning:
 
-* `self_head` = repo HEAD at time of super commit
-* Children entries reference the exact snapshot hash used
-* For each child, `type` will be either:
+* `self_head` — Pointer to this repo's HEAD at super-commit time
+* `children[]` — Frozen hierarchy:
 
-    * `"super"` → referencing child’s HEAD_SUPER
-    * `"commit"` → referencing child’s HEAD (if they have no super commit)
-
----
-
-# 4. Linking Children (New Command)
-
-Add CLI:
-
-```
-mrvc link --child path/to/repo
-```
-
-### Steps
-
-1. Normalize path
-2. Verify `.mrvc/` exists under child
-3. Append to children.json
-4. Ensure no duplicate entries
-5. Store relative path from parent root
+    * `path`: relative path to child
+    * `ref`: child HEAD_SUPER or HEAD
+    * `type`: `"super"` or `"commit"`
+* `message`, `author`, `timestamp`: metadata
 
 ---
 
-# 5. Behavior When Commit is Made (Normal Commit)
+# 4. Linking Children
 
-Normal commit should:
+### Command
 
-* NEVER include nested repos
-  Already ensured because `ListFiles(... IgnoreNestedRepos: true)`
-* Only affect `HEAD`, not `HEAD_SUPER`
-* Only update local working tree snapshot
+```
+mrvc link <path-to-child>
+```
 
-No changes needed to commit logic.
+### Behavior
+
+1. Normalize input path
+2. Convert to absolute path
+3. Validate directory contains:
+
+    * `.mrvc/`
+    * `.mrvc/metadata.json`
+4. Convert absolute child path → **relative to parent repo root**
+5. Load `.mrvc/children.json` (or create it)
+6. Add entry if not duplicate
+7. Save back to `.mrvc/children.json`
+8. No commit or super commit is created
+
+**Linking updates only children.json, not history.**
+
+### Why?
+
+children.json = **working topology**
+Super commits = **versioned topology**
 
 ---
 
-# 6. Behavior When Super Commit is Made
+# 5. Normal Commit Behavior
 
-Add CLI:
+A normal commit:
 
-```
-mrvc super-commit --message "..." [--strict]
-```
+* Scans the working directory
+* Ignores child MRVC repos (via `IgnoreNestedRepos`)
+* Creates a blob/tree snapshot
+* Updates `.mrvc/HEAD`
+* Does NOT affect `.mrvc/HEAD_SUPER`
+* Does NOT snapshot children.json
 
-### **6.1 High-Level Algorithm**
-
-Given repo R:
-
-1. Load R’s own HEAD
-2. Load R’s `children.json`
-3. For each DIRECT child C:
-
-    * Validate C is an MRVC repo
-    * If C has HEAD_SUPER → use it
-    * Else if strict mode → error
-    * Else → use HEAD, but warn
-4. Build `SuperCommitObject`
-5. Hash + store
-6. Update `.mrvc/HEAD_SUPER`
-7. Print summary
+### Normal commits represent file-level history only.
 
 ---
 
-# 7. Detailed Super Commit Flow (Step-by-Step)
+# 6. Super Commit Behavior
 
-### Function: `CreateSuperCommit(message, author, strict bool)`
-
-#### Step 1 — Load Repo Root + Validate MRVC
-
-```go
-repoRoot := fs.GetCurrentDir()
-if !IsDirPresent(repoRoot+"/.mrvc") → error
-```
-
-#### Step 2 — Load self HEAD
-
-Use existing helper:
+### Command
 
 ```
-selfHead := readHEAD()
+mrvc super-commit --message "msg" [--strict]
 ```
 
-If empty: error
-Super commit requires at least one commit.
+### Purpose
 
-#### Step 3 — Load children list
+Create a **stable hierarchical snapshot** capturing:
 
-`children.json` format:
+* Repo's current HEAD
+* Current children.json structure
+* Each child repo's stable snapshot (HEAD_SUPER)
+* Or, if absent, child’s HEAD (default mode only)
 
-```json
-{ "children": ["childA", "childB"] }
-```
+### KEY RULE
 
-If file doesn't exist → children = empty array.
+**Super commits look ONLY at direct children.**
+No recursion into grandchildren.
 
-#### Step 4 — Resolve each child
-
-For each child:
-
-1. childAbs := repoRoot + "/" + childPath
-2. Verify `.mrvc` exists
-3. Determine:
-
-```
-childSuper := readHEADSUPER(childAbs)
-childHead  := readHEAD(childAbs)
-```
-
-4. Decision logic:
-
-* If childSuper != "" →
-  Use {ref: childSuper, type: "super"}
-* Else if strict →
-  throw error: "Child X has no super commit"
-* Else
-  Use {ref: childHead, type: "commit"}
-  Print warning: "Child X has no stable snapshot; using HEAD"
-
-#### Step 5 — Build `SuperCommitObject`
-
-```
-{
-  self_head: selfHead,
-  children: resolved [],
-  message,
-  author,
-  timestamp
-}
-```
-
-#### Step 6 — Hash + store
-
-Use `HashContent` and `SaveObject` (same as commits)
-
-Store under:
-
-```
-.mrvc/objects/<hash>
-```
-
-#### Step 7 — Update HEAD_SUPER file
-
-```
-.mrvc/HEAD_SUPER = hash
-```
-
-#### Step 8 — Done
+Child super commits contain their own children recursively — maintaining clean team boundaries.
 
 ---
 
-# 8. Super Commit Strict Mode
+# 6.1 Super Commit Algorithm (Final)
 
-Activate with:
+Given repo **R**:
+
+1. Ensure R has at least one normal commit:
+
+   ```
+   selfHead := readHEAD()
+   if selfHead == "" → error
+   ```
+2. Load children.json (may be empty)
+3. For each child in children.json:
+
+    * Validate it is a valid MRVC repo
+    * Read child HEAD
+    * Read child HEAD_SUPER (stable snapshot)
+4. Apply resolution rules:
+
+### Resolution Rules
+
+#### **Case 1 — Child has HEAD_SUPER**
+
+Always use it:
+
+```
+ref = childSuper
+type = "super"
+```
+
+#### **Case 2 — Child has no super commit**
+
+* **Strict mode** → throw error
+* **Default mode** → use child HEAD + warn:
+
+```
+ref = childHead
+type = "commit"
+(WARN: child has no stable snapshot)
+```
+
+5. Build `SuperCommitObject`
+6. Hash + store object in `.mrvc/objects/`
+7. Update `.mrvc/HEAD_SUPER` with the new hash
+8. Done
+
+---
+
+# 7. Strict Mode (Optional)
+
+Enable with:
 
 ```
 mrvc super-commit --strict
 ```
 
-Behavior:
+Strict mode enforces:
 
-* If any child has NO super commit → immediate error
-* Prevents unstable snapshots
-* Ideal for CI pipelines / release branches
+* All children MUST have HEAD_SUPER
+* Using child HEAD is NOT allowed
+* Guarantees fully stable tree
+* Ideal for CI/CD and release pipelines
+
+Default mode is user-friendly; strict mode is enforcement.
 
 ---
 
-# 9. Why We Do NOT Recurse Deeply
+# 8. Why Super Commits Do NOT Recurse
 
-Parent repo only sees **direct children**.
+Parent repositories must NOT inspect grandchildren.
+Child repos are responsible for their own subtree.
 
-Child super commits carry subtree snapshots.
+This ensures:
 
-Parent super commits must TRUST child super commits — do NOT walk into grandchildren.
-This preserves team boundaries and ensures predictable snapshots.
+* Clean module boundaries
+* Predictable behavior
+* No accidental inclusion of unstable deep changes
+* Simple mental model
+* Hierarchy scales arbitrarily deep
+
+Example:
+
+```
+RootA
+ └── RepoB
+      └── RepoC
+```
+
+* RepoC super-commit → C_SC1
+* RepoB super-commit → includes C_SC1
+* RootA super-commit → includes B_SC1
+
+Perfect delegation.
+
+---
+
+# 9. Versioned Topology Model
+
+### children.json is NOT history
+
+It is only the current working structure.
+
+### Super commits ARE the history
+
+They store:
+
+* which children existed
+* which snapshot each child contributed
+
+Thus:
+
+* Linking/unlinking modifies children.json only
+* The next super commit records the new topology
+
+This ensures:
+
+* Full reproducibility of past topology
+* Clean, explicit historical records
 
 ---
 
@@ -269,27 +310,28 @@ This preserves team boundaries and ensures predictable snapshots.
 
 ### Status
 
-* Does NOT consider child repos
-* Only compares working tree vs HEAD
-* No change needed
+* Only inspects file changes
+* Ignores nested repos
+* Requires no modification
 
 ### Checkout (future)
 
-* When implementing checkout:
+Super commit checkout must:
 
-    * HEAD restores local repo
-    * HEAD_SUPER restores hierarchical snapshot by recursively walking super commits
-    * This will require implementing a restore mechanism for each repo
+* Read SuperCommitObject
+* Restore:
 
-(Not needed now)
+    * repo self HEAD
+    * each child to exact snapshot referenced
+* Recursively apply for deeper levels
+
+**Checkout design is future work, separate document.**
 
 ---
 
-# 11. Integration With Current Code
+# 11. Integration With Codebase
 
-## Where new logic should be added:
-
-### New Files (recommended):
+Recommended new files:
 
 ```
 src/internal/core/version_control/v1/super_commit.go
@@ -298,13 +340,13 @@ src/internal/commands/super_commit.go
 src/internal/commands/link.go
 ```
 
-## New helpers:
+Key helper functions:
 
-* `readHEADSUPER(repoRoot string)`
-* `updateHEADSUPER(repoRoot, hash string)`
-* `LoadChildren(repoRoot string)`
-* `ValidateChildRepo(path string)`
-* `ResolveChildSnapshot(childPath string, strict bool)`
+* `readHEADSUPER(path string)`
+* `updateHEADSUPER(path, hash string)`
+* `LoadChildren(path string)`
+* `ResolveChildSnapshot(path string, strict bool)`
+* `IsValidMRVCRepo(path string)`
 
 ---
 
@@ -312,46 +354,48 @@ src/internal/commands/link.go
 
 ### Super Commit Errors
 
-* No HEAD exists
-* Child repo missing or invalid
-* In strict mode: child has no HEAD_SUPER
-* Invalid children.json entries
+* Repo has no HEAD
+* Invalid children.json
+* Child repo missing `.mrvc/`
+* Child repo missing metadata
+* Strict mode and child missing HEAD_SUPER
+* Unable to read or write MRVC object files
 
-### Warnings (non-strict)
+### Warnings (non-strict mode)
 
 * Child has no super commit → using HEAD
 
 ---
 
-# 13. Example Workflow
+# 13. Real Workflow Example
 
 ```
+RepoC:
+  mrvc commit
+  mrvc super-commit -m "stable C1"
+
 RepoB:
-  mrvc commit ...
+  mrvc link ../RepoC
+  mrvc commit
   mrvc super-commit -m "stable B1"
 
-RepoA:
-  mrvc link --child path/to/RepoB
+RootA:
+  mrvc link ./RepoB
   mrvc super-commit -m "root stable snapshot"
 ```
 
-RepoA’s super commit will contain:
+RootA super commit contains:
 
 ```
 children: [
-  { path: "path/to/RepoB", ref: "B1", type: "super" }
+  { path: "RepoB", ref: "B1", type: "super" }
 ]
 ```
 
----
+RepoB super commit contains:
 
-# 14. Final Notes
-
-This design:
-
-* keeps repos independent
-* supports team workflows cleanly
-* guarantees stable snapshots
-* avoids recursive complexity
-* ensures predictable, explicit behavior
-* naturally scales to large hierarchies
+```
+children: [
+  { path: "RepoC", ref: "C1", type: "super" }
+]
+```

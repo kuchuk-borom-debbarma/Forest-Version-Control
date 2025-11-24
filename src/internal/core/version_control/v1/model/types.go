@@ -27,3 +27,7 @@ type CommitObject struct {
 	Author    string `json:"author"`
 	Timestamp string `json:"timestamp"`
 }
+
+type ChildrenFile struct {
+	Children []string `json:"children"`
+}

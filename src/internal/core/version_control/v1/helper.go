@@ -1,4 +1,4 @@
-package v1
+package constants
 
 import (
 	"MultiRepoVC/src/internal/core/version_control/v1/model"
