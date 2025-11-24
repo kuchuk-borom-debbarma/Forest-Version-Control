@@ -22,148 +22,93 @@ GOOS=darwin \
 GOARCH=$GOARCH \
 go build -o build/mrvc ./src/cmd/mrvc
 
-echo "📁 Creating sensible testRepo..."
+echo "📁 Creating nested repo hierarchy..."
 
-TEST_REPO="build/testRepo"
-SUB_REPO="$TEST_REPO/subRepo"
+ROOT="build/RootRepo"
+CHILD_A="$ROOT/ChildA"
+CHILD_B="$ROOT/ChildB"
+CHILD_AA="$CHILD_A/ChildAA"
 
-mkdir -p "$TEST_REPO/internal/math"
-mkdir -p "$TEST_REPO/pkg/greetings"
-mkdir -p "$TEST_REPO/assets"
+# Create folder structure
+mkdir -p "$CHILD_AA" "$CHILD_A" "$CHILD_B" "$ROOT"
 
-# Move built mrvc into testRepo root
-cp build/mrvc "$TEST_REPO/mrvc"
+# Copy mrvc into all repos
+for repo in "$ROOT" "$CHILD_A" "$CHILD_B" "$CHILD_AA"; do
+    cp build/mrvc "$repo/mrvc"
+done
 
+# Function to create sample files
+create_repo_files() {
+    local REPO_PATH="$1"
+    local NAME="$2"
 
-# -------------------------------
-# Create .mrvcignore
-# -------------------------------
+    mkdir -p "$REPO_PATH/src"
+    mkdir -p "$REPO_PATH/assets"
 
-cat > "$TEST_REPO/.mrvcignore" <<EOF
-# Ignore build artifacts
-build/
-
-# Ignore temporary files
-*.tmp
-*.log
-
-# Ignore Go vendor folder
-vendor/
-
-# Ignore macOS metadata files
-.DS_Store
+    cat > "$REPO_PATH/README.md" <<EOF
+# $NAME
+This is repository $NAME created for hierarchical MRVC testing.
 EOF
 
-# -------------------------------
-# Create sample files
-# -------------------------------
-
-cat > "$TEST_REPO/README.md" <<EOF
-# TestRepo
-
-A small example Go project used for testing the MultiRepoVC version control system.
-EOF
-
-cat > "$TEST_REPO/app.go" <<EOF
-package main
-
-import (
-    "fmt"
-    "testRepo/internal/math"
-    "testRepo/pkg/greetings"
-)
-
-func main() {
-    fmt.Println("Hello from TestRepo!")
-    fmt.Println("2 + 3 =", math.Add(2, 3))
-    fmt.Println(greetings.Hello("Kuku"))
-}
-EOF
-
-cat > "$TEST_REPO/internal/math/add.go" <<EOF
-package math
-
-func Add(a, b int) int {
-    return a + b
-}
-EOF
-
-cat > "$TEST_REPO/internal/math/multiply.go" <<EOF
-package math
-
-func Multiply(a, b int) int {
-    return a * b
-}
-EOF
-
-cat > "$TEST_REPO/pkg/greetings/hello.go" <<EOF
-package greetings
-
-func Hello(name string) string {
-    return "Hello, " + name + "!"
-}
-EOF
-
-cat > "$TEST_REPO/assets/sample.txt" <<EOF
-This is a sample asset file for snapshot testing with MultiRepoVC.
-EOF
-
-echo "📁 TestRepo created."
-
-# ================================================================================
-# CREATE NESTED REPO
-# ================================================================================
-
-echo "📁 Creating nested MRVC repository inside testRepo/subRepo..."
-
-mkdir -p "$SUB_REPO"
-
-# Move mrvc binary into nested repo
-cp build/mrvc "$SUB_REPO/mrvc"
-
-# Initialize nested repo structure
-mkdir -p "$SUB_REPO/src"
-mkdir -p "$SUB_REPO/assets"
-
-cat > "$SUB_REPO/README.md" <<EOF
-# SubRepo
-
-A nested MRVC repository inside TestRepo.
-Used to test hierarchical versioning.
-EOF
-
-cat > "$SUB_REPO/src/module.go" <<EOF
+    cat > "$REPO_PATH/src/module.go" <<EOF
 package src
 
-func SubValue() int {
-    return 42
+func Value() string {
+    return "Hello from $NAME"
 }
 EOF
 
-cat > "$SUB_REPO/assets/info.txt" <<EOF
-This is a nested repo asset inside subRepo.
+    cat > "$REPO_PATH/assets/sample.txt" <<EOF
+Asset file for $NAME.
 EOF
 
-# Create subRepo .mrvcignore
-cat > "$SUB_REPO/.mrvcignore" <<EOF
+    # default ignore rules
+    cat > "$REPO_PATH/.mrvcignore" <<EOF
 *.tmp
-ignore-this/
+*.log
 EOF
+}
 
-echo "📁 Initializing both repos with mrvc..."
+create_repo_files "$ROOT" "RootRepo"
+create_repo_files "$CHILD_A" "ChildA"
+create_repo_files "$CHILD_B" "ChildB"
+create_repo_files "$CHILD_AA" "ChildAA"
 
-# Initialize parent repo
+echo "📁 Initializing all repos..."
+
+( cd "$ROOT" && ./mrvc init RootRepo "Builder Script" )
+( cd "$CHILD_A" && ./mrvc init ChildA "Builder Script" )
+( cd "$CHILD_B" && ./mrvc init ChildB "Builder Script" )
+( cd "$CHILD_AA" && ./mrvc init ChildAA "Builder Script" )
+
+echo "🔗 Linking repos..."
+
+# RootRepo -> ChildA, ChildB
 (
-    cd "$TEST_REPO"
-    ./mrvc init testRepo "Builder Script"
+    cd "$ROOT"
+    ./mrvc link ChildA
+    ./mrvc link ChildB
 )
 
-# Initialize child repo
+# ChildA -> ChildAA
 (
-    cd "$SUB_REPO"
-    ./mrvc init subRepo "Builder Script"
+    cd "$CHILD_A"
+    ./mrvc link ChildAA
 )
 
-echo "🎉 Nested repository created at: $SUB_REPO"
-echo "🎉 MRVC binary copied into both repos"
-echo "🎉 Build complete!"
+echo "📸 Performing first commits..."
+
+( cd "$ROOT"     && ./mrvc commit "first commit for RootRepo" "Builder Script" "*" )
+( cd "$CHILD_A"  && ./mrvc commit "first commit for ChildA"   "Builder Script" "*" )
+( cd "$CHILD_B"  && ./mrvc commit "first commit for ChildB"   "Builder Script" "*" )
+( cd "$CHILD_AA" && ./mrvc commit "first commit for ChildAA"  "Builder Script" "*" )
+
+echo ""
+echo "🎉 All repos initialized, linked, and committed!"
+echo "📂 Final Structure:"
+echo "RootRepo/"
+echo " ├── ChildA/"
+echo " │     └── ChildAA/"
+echo " └── ChildB/"
+echo ""
+echo "🚀 Build complete."
