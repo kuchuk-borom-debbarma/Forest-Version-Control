@@ -8,7 +8,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // SaveObject OBJECT STORAGE
@@ -77,21 +76,6 @@ func addOrReplaceTreeEntry(tree model.TreeObject, entry model.TreeEntry) model.T
 	return tree
 }
 
-// HEAD HELPERS
-// readHEAD returns the current commit hash (or empty if no commits)
-// updateHEAD moves HEAD to a new commit
-func readHEAD() string {
-	data, err := os.ReadFile(".mrvc/HEAD")
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
-}
-
-func updateHEAD(hash string) error {
-	return os.WriteFile(".mrvc/HEAD", []byte(strings.TrimSpace(hash)), 0644)
-}
-
 // Recursively flattens a TreeObject into path → blobHash mapping
 func flattenTree(repoRoot, prefix string, tree model.TreeObject, out map[string]string) error {
 	for _, entry := range tree.Entries {
@@ -132,16 +116,4 @@ func HashSuperCommit(sc model.SuperCommitObject) (string, []byte, error) {
 	}
 	h := sha256.Sum256(jsonBytes)
 	return hex.EncodeToString(h[:]), jsonBytes, nil
-}
-
-func readHEADSUPER() string {
-	data, err := os.ReadFile(".mrvc/HEAD_SUPER")
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
-}
-
-func updateHEADSUPER(hash string) error {
-	return os.WriteFile(".mrvc/HEAD_SUPER", []byte(strings.TrimSpace(hash)), 0644)
 }

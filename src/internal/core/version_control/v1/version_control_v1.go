@@ -1,9 +1,6 @@
 package constants
 
 import (
-	"MultiRepoVC/src/internal/core/version_control/v1/model"
-	"MultiRepoVC/src/internal/utils/fs"
-	"MultiRepoVC/src/internal/utils/time"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +10,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"MultiRepoVC/src/internal/core/version_control/v1/model"
+	"MultiRepoVC/src/internal/utils/fs"
+	"MultiRepoVC/src/internal/utils/time"
 )
 
 type VersionControlV1 struct{}
@@ -57,72 +58,54 @@ func (v *VersionControlV1) Commit(message string, author string, files []string)
 
 	repoRoot := fs.GetCurrentDir()
 
-	// -----------------------------
-	// Wildcard "*" → commit all files
-	// -----------------------------
+	// Expand wildcard
 	if len(files) == 1 && files[0] == "*" {
 		all, err := fs.ListFiles(repoRoot, fs.WalkOptions{
 			IgnoreMRVC:          true,
-			IgnoreNestedRepos:   true, // IMPORTANT
+			IgnoreNestedRepos:   true,
 			ApplyIgnorePatterns: true,
 		})
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to list files for wildcard commit: %w", err)
 		}
-
 		files = make([]string, 0, len(all))
 		for _, f := range all {
 			files = append(files, fs.NormalizePath(f))
 		}
 	} else {
 		for i, f := range files {
-			normalized := fs.NormalizePath(f)
-			files[i] = normalized
-			if !fs.FileExists(normalized) {
-				return errors.New("file does not exist: " + normalized)
+			n := fs.NormalizePath(f)
+			if !fs.FileExists(n) {
+				return fmt.Errorf("file does not exist: %s", n)
 			}
+			files[i] = n
 		}
 	}
 
-	// -----------------------------
-	// Build directory → TreeObject
-	// -----------------------------
+	// Build tree objects
 	directoryTrees := make(map[string]model.TreeObject)
-
-	// Parent → children mapping (optimization)
 	children := make(map[string][]string)
 
 	for _, filePath := range files {
-
-		// --------------------------------------
-		// 1. Blob
-		// --------------------------------------
-		//TODO stream large files instead of reading all at once
 		content, err := os.ReadFile(filePath)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to read file %s: %w", filePath, err)
 		}
-
 		blobHash := HashContent(content)
-
 		if err := SaveObject(blobHash, content); err != nil {
-			return err
+			return fmt.Errorf("failed to save blob object: %w", err)
 		}
 
-		// --------------------------------------
-		// 2. Determine directory of file
-		// --------------------------------------
 		fileDir := filepath.Dir(filePath)
-		if fileDir == "." { //if file is in repo root directory, set to repo root
+		if fileDir == "." {
 			fileDir = repoRoot
 		}
-
 		fileDir = fs.NormalizePath(fileDir)
+
 		if _, exists := directoryTrees[fileDir]; !exists {
 			directoryTrees[fileDir] = model.TreeObject{Entries: []model.TreeEntry{}}
 		}
 
-		// Add file entry into this directory tree
 		tree := directoryTrees[fileDir]
 		tree = addOrReplaceTreeEntry(tree, model.TreeEntry{
 			Name:      filepath.Base(filePath),
@@ -131,9 +114,7 @@ func (v *VersionControlV1) Commit(message string, author string, files []string)
 		})
 		directoryTrees[fileDir] = tree
 
-		// --------------------------------------
-		// 3. Ensure all parent directories exist
-		// --------------------------------------
+		// ensure parent directories are present
 		current := fileDir
 		for current != repoRoot {
 			parent := filepath.Dir(current)
@@ -141,58 +122,26 @@ func (v *VersionControlV1) Commit(message string, author string, files []string)
 				parent = repoRoot
 			}
 			parent = fs.NormalizePath(parent)
-
 			if _, ok := directoryTrees[parent]; !ok {
 				directoryTrees[parent] = model.TreeObject{Entries: []model.TreeEntry{}}
 			}
-
 			children[parent] = append(children[parent], current)
-
 			current = parent
 		}
 	}
 
-	// ==================================================================
-	// We must sort directories from deepest → shallowest because tree
-	// hashes must be built bottom-up.
-	//
-	// A tree object contains the hashes of its children (files or
-	// subtrees). Therefore, a parent directory cannot be hashed until
-	// all of its subdirectories have already been hashed.
-	//
-	// By processing deeper directories first, we guarantee that when we
-	// build a parent tree, all child tree hashes are already available.
-	// This ensures deterministic, correct tree construction—just like
-	// Git’s own object model.
-	// ==================================================================
-
+	// Sort directories deepest -> shallowest
 	var dirs []string
 	for d := range directoryTrees {
 		dirs = append(dirs, d)
 	}
-
 	sort.Slice(dirs, func(i, j int) bool {
 		return strings.Count(dirs[i], "/") > strings.Count(dirs[j], "/")
 	})
-	// ==================================================================
-	// BUILD TREES BOTTOM-UP (single pass)  O(N)
-	//
-	// After sorting folders deepest → shallowest, this loop constructs
-	// the tree objects for every directory. For each folder:
-	//   • Insert subtree entries using child directory hashes
-	//   • Sort entries for deterministic hashing
-	//   • Compute the tree hash
-	//   • Save the tree object
-	//
-	// Processing bottom-up ensures that when we hash a directory, all
-	// its children (files and subtrees) already have hashes available.
-	// ==================================================================
-	treeHashes := make(map[string]string)
 
+	treeHashes := make(map[string]string)
 	for _, dir := range dirs {
 		tree := directoryTrees[dir]
-
-		// Add subtree entries
 		for _, child := range children[dir] {
 			tree = addOrReplaceTreeEntry(tree, model.TreeEntry{
 				Name:      filepath.Base(child),
@@ -200,29 +149,33 @@ func (v *VersionControlV1) Commit(message string, author string, files []string)
 				Hash:      treeHashes[child],
 			})
 		}
-
-		// Deterministic ordering
+		// deterministic ordering
 		sort.Slice(tree.Entries, func(i, j int) bool {
 			return tree.Entries[i].Name < tree.Entries[j].Name
 		})
-
 		hash, jsonBytes, err := HashTree(tree)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to hash tree for %s: %w", dir, err)
 		}
-
 		if err := SaveObject(hash, jsonBytes); err != nil {
-			return err
+			return fmt.Errorf("failed to save tree object: %w", err)
 		}
-
 		treeHashes[dir] = hash
 	}
 
-	rootTreeHash := treeHashes[repoRoot]
-
-	// ==================================================================
-	// CREATE COMMIT OBJECT
-	// ==================================================================
+	rootTreeHash, ok := treeHashes[repoRoot]
+	if !ok {
+		// If nothing was committed, create an empty tree
+		emptyTree := model.TreeObject{Entries: []model.TreeEntry{}}
+		hash, jsonBytes, err := HashTree(emptyTree)
+		if err != nil {
+			return fmt.Errorf("failed to hash empty tree: %w", err)
+		}
+		if err := SaveObject(hash, jsonBytes); err != nil {
+			return fmt.Errorf("failed to save empty tree: %w", err)
+		}
+		rootTreeHash = hash
+	}
 
 	commit := model.CommitObject{
 		Tree:      rootTreeHash,
@@ -234,16 +187,13 @@ func (v *VersionControlV1) Commit(message string, author string, files []string)
 
 	commitHash, commitBytes, err := HashCommit(commit)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to hash commit: %w", err)
 	}
-
 	if err := SaveObject(commitHash, commitBytes); err != nil {
-		return err
+		return fmt.Errorf("failed to save commit object: %w", err)
 	}
-
-	err = updateHEAD(commitHash)
-	if err != nil {
-		return err
+	if err := updateHEAD(commitHash); err != nil {
+		return fmt.Errorf("failed to update HEAD: %w", err)
 	}
 
 	log.Println("Commit created:", commitHash)
@@ -256,92 +206,184 @@ func (v *VersionControlV1) Commit(message string, author string, files []string)
 
 func (v *VersionControlV1) Status() (string, error) {
 	repoRoot := fs.GetCurrentDir()
+	var sb strings.Builder
 
+	// SECTION 1 - Normal status
 	head := readHEAD()
 	if head == "" {
-		return "No commits yet.", nil
+		sb.WriteString("No commits yet.\n")
+	} else {
+		normalStatus, err := v.statusNormal(repoRoot, head)
+		if err != nil {
+			return "", fmt.Errorf("failed to compute normal status: %w", err)
+		}
+		sb.WriteString(normalStatus)
+		sb.WriteString("\n")
 	}
 
-	// ------------------------------------------------------
-	// Load HEAD commit
-	// ------------------------------------------------------
+	// SECTION 2 - Super commit status
+	headSuper := readHEADSUPER()
+	if headSuper == "" {
+		sb.WriteString("No super commits yet.\n")
+		return sb.String(), nil
+	}
+
+	sb.WriteString(fmt.Sprintf("Super Commit: %s\n", headSuper))
+
+	// Load super commit object
+	objPath := filepath.Join(".mrvc", "objects", headSuper[:2], headSuper[2:])
+	data, err := os.ReadFile(objPath)
+	if err != nil {
+		sb.WriteString(fmt.Sprintf("ERROR: Failed to load super commit object %s: %v\n", headSuper, err))
+		return sb.String(), nil
+	}
+	var sc model.SuperCommitObject
+	if err := json.Unmarshal(data, &sc); err != nil {
+		sb.WriteString(fmt.Sprintf("ERROR: Corrupt super commit object: %v\n", err))
+		return sb.String(), nil
+	}
+
+	sb.WriteString("\nSelf snapshot:\n")
+	sb.WriteString(fmt.Sprintf("  commit: %s\n\n", sc.SelfHead))
+
+	// Load working children.json (best-effort)
+	childrenPath := filepath.Join(repoRoot, ".mrvc", childrenFileName)
+	cf := model.ChildrenFile{Children: []model.ChildEntry{}}
+	if fs.FileExists(childrenPath) {
+		if err := fs.ReadJSON(childrenPath, &cf); err != nil {
+			sb.WriteString("  ERROR: failed to read children.json\n")
+			return sb.String(), nil
+		}
+	}
+
+	// create map from repoName -> ChildEntry for quick lookup
+	childMap := make(map[string]model.ChildEntry)
+	for _, c := range cf.Children {
+		childMap[c.RepoName] = c
+	}
+
+	sb.WriteString("Children:\n")
+	for _, ch := range sc.Children {
+		sb.WriteString(fmt.Sprintf("  %s (path: %s)\n", ch.RepoName, ch.Path))
+
+		entry, ok := childMap[ch.RepoName]
+		if !ok {
+			sb.WriteString("    ✗ ERROR: child repo missing from children.json\n\n")
+			continue
+		}
+
+		childAbs := filepath.Join(repoRoot, entry.Path)
+		if !fs.IsDirPresent(childAbs) {
+			sb.WriteString("    ✗ ERROR: child directory missing\n\n")
+			continue
+		}
+
+		childMrvc := filepath.Join(childAbs, ".mrvc")
+		metaPath := filepath.Join(childMrvc, "metadata.json")
+		if !fs.FileExists(metaPath) {
+			sb.WriteString("    ✗ ERROR: missing metadata.json in child\n\n")
+			continue
+		}
+
+		var meta model.Metadata
+		if err := fs.ReadJSON(metaPath, &meta); err != nil {
+			sb.WriteString("    ✗ ERROR: failed reading child's metadata.json\n\n")
+			continue
+		}
+
+		if meta.Name != ch.RepoName {
+			sb.WriteString(fmt.Sprintf("    ✗ ERROR: repo identity mismatch (expected=%s, found=%s)\n\n", ch.RepoName, meta.Name))
+			continue
+		}
+
+		// Make sure referenced object exists inside child .mrvc/objects
+		refObj := filepath.Join(childMrvc, "objects", ch.Ref[:2], ch.Ref[2:])
+		if !fs.FileExists(refObj) {
+			sb.WriteString(fmt.Sprintf("    ✗ ERROR: referenced object missing: %s\n\n", ch.Ref))
+			continue
+		}
+
+		sb.WriteString(fmt.Sprintf("    ✓ type: %s\n", ch.Type))
+		sb.WriteString(fmt.Sprintf("    ✓ ref:  %s\n", ch.Ref))
+		if ch.Type == "commit" {
+			sb.WriteString("    ⚠ child has no super commit yet\n")
+		}
+		sb.WriteString("\n")
+	}
+
+	return sb.String(), nil
+}
+
+func (v *VersionControlV1) statusNormal(repoRoot, head string) (string, error) {
+	// head is expected non-empty
+	if len(head) < 2 {
+		return "", errors.New("invalid HEAD value")
+	}
+
+	// Load commit object
 	commitPath := filepath.Join(".mrvc", "objects", head[:2], head[2:])
 	commitBytes, err := os.ReadFile(commitPath)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to read HEAD commit object: %w", err)
 	}
-
 	var commit model.CommitObject
 	if err := json.Unmarshal(commitBytes, &commit); err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to parse HEAD commit object: %w", err)
 	}
 
-	// ------------------------------------------------------
-	// Load HEAD tree
-	// ------------------------------------------------------
+	// Load tree object
 	treeHash := commit.Tree
+	if len(treeHash) < 2 {
+		return "", errors.New("invalid tree hash in commit")
+	}
 	treePath := filepath.Join(".mrvc", "objects", treeHash[:2], treeHash[2:])
 	treeBytes, err := os.ReadFile(treePath)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to read tree object: %w", err)
 	}
-
 	var headTree model.TreeObject
 	if err := json.Unmarshal(treeBytes, &headTree); err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to parse tree object: %w", err)
 	}
 
-	// Convert HEAD tree to map path → hash
 	headFiles := make(map[string]string)
-	err = flattenTree(repoRoot, "", headTree, headFiles)
-	if err != nil {
-		return "", err
+	if err := flattenTree(repoRoot, "", headTree, headFiles); err != nil {
+		return "", fmt.Errorf("failed to flatten tree: %w", err)
 	}
 
-	// ------------------------------------------------------
-	// Scan working directory
-	// ------------------------------------------------------
 	workingFiles, err := fs.ListFiles(repoRoot, fs.WalkOptions{
 		IgnoreMRVC:          true,
 		IgnoreNestedRepos:   true,
 		ApplyIgnorePatterns: true,
 	})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to scan working directory: %w", err)
 	}
 
-	// Normalize paths to match headFiles keys
-	normalized := make([]string, 0, len(workingFiles))
+	norm := make([]string, 0, len(workingFiles))
 	for _, f := range workingFiles {
-		normalized = append(normalized, fs.NormalizePath(f))
+		norm = append(norm, fs.NormalizePath(f))
 	}
 
-	// ------------------------------------------------------
-	// Compare
-	// ------------------------------------------------------
 	var modified []string
 	var deleted []string
 	var untracked []string
+	seen := make(map[string]bool, len(norm))
 
-	seen := make(map[string]bool)
-
-	for _, w := range normalized {
+	for _, w := range norm {
 		rel, _ := filepath.Rel(repoRoot, w)
 		rel = filepath.ToSlash(rel)
-
 		seen[rel] = true
 
-		// In HEAD?
-		headHash, exists := headFiles[rel]
-		if !exists {
+		headHash, ok := headFiles[rel]
+		if !ok {
 			untracked = append(untracked, rel)
 			continue
 		}
 
-		// Compare content hash
 		currentHash, err := fs.CalculateFileHash(w)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("failed to hash working file %s: %w", w, err)
 		}
 
 		if currentHash != headHash {
@@ -349,20 +391,17 @@ func (v *VersionControlV1) Status() (string, error) {
 		}
 	}
 
-	// Deleted files: in HEAD but not in working dir
 	for rel := range headFiles {
 		if !seen[rel] {
 			deleted = append(deleted, rel)
 		}
 	}
 
-	// ------------------------------------------------------
-	// Build output
-	// ------------------------------------------------------
+	// Build status string
 	var sb strings.Builder
-
 	if len(modified) == 0 && len(deleted) == 0 && len(untracked) == 0 {
-		return "clean", nil
+		sb.WriteString("clean")
+		return sb.String(), nil
 	}
 
 	if len(modified) > 0 {
@@ -372,7 +411,6 @@ func (v *VersionControlV1) Status() (string, error) {
 		}
 		sb.WriteString("\n")
 	}
-
 	if len(deleted) > 0 {
 		sb.WriteString("Deleted:\n")
 		for _, d := range deleted {
@@ -380,7 +418,6 @@ func (v *VersionControlV1) Status() (string, error) {
 		}
 		sb.WriteString("\n")
 	}
-
 	if len(untracked) > 0 {
 		sb.WriteString("Untracked:\n")
 		for _, u := range untracked {
@@ -396,23 +433,18 @@ func (v *VersionControlV1) Status() (string, error) {
 // LINK
 // ======================================================================
 
-// Link establishes a link between the current repository and a child repository
-
 func (v *VersionControlV1) Link(childPath string) error {
-	// 1. Validate & normalize child path
 	if childPath == "" {
 		return errors.New("child path cannot be empty")
 	}
 	childPath = fs.NormalizePath(childPath)
 
-	// 2. Resolve absolute paths
 	parentRoot := fs.GetCurrentDir()
 	childAbs, err := filepath.Abs(childPath)
 	if err != nil {
 		return fmt.Errorf("unable to resolve absolute path for '%s': %w", childPath, err)
 	}
 
-	// 3. Validate child is a proper MRVC repo
 	childMrvc := filepath.Join(childAbs, ".mrvc")
 	if !fs.IsDirPresent(childMrvc) {
 		return fmt.Errorf("'%s' is not an MRVC repository (missing .mrvc directory)", childAbs)
@@ -423,38 +455,28 @@ func (v *VersionControlV1) Link(childPath string) error {
 		return fmt.Errorf("'%s' is not a valid MRVC repository (missing metadata.json)", childAbs)
 	}
 
-	// 4. Load child's metadata to get repoName
 	var meta model.Metadata
 	if err := fs.ReadJSON(metaPath, &meta); err != nil {
 		return fmt.Errorf("failed to read child metadata.json: %w", err)
 	}
 
-	// 5. Child path must be inside parent
 	childRel, err := filepath.Rel(parentRoot, childAbs)
 	if err != nil {
 		return fmt.Errorf("unable to calculate relative path: %w", err)
 	}
 	childRel = filepath.ToSlash(childRel)
-
 	if strings.HasPrefix(childRel, "../") {
 		return fmt.Errorf("child repo '%s' must be inside parent repo '%s'", childRel, parentRoot)
 	}
 
-	// 6. Load existing children.json
 	childrenPath := filepath.Join(parentRoot, ".mrvc", childrenFileName)
 	cf := model.ChildrenFile{Children: []model.ChildEntry{}}
-
 	if fs.FileExists(childrenPath) {
-		data, err := os.ReadFile(childrenPath)
-		if err != nil {
-			return fmt.Errorf("failed to read children.json: %w", err)
-		}
-		if err := json.Unmarshal(data, &cf); err != nil {
+		if err := fs.ReadJSON(childrenPath, &cf); err != nil {
 			return fmt.Errorf("invalid children.json: %w", err)
 		}
 	}
 
-	// 7. Prevent duplicate repoName or duplicate path
 	for _, existing := range cf.Children {
 		if existing.Path == childRel {
 			return fmt.Errorf("child path '%s' is already linked", childRel)
@@ -464,20 +486,13 @@ func (v *VersionControlV1) Link(childPath string) error {
 		}
 	}
 
-	// 8. Append new child entry
 	newEntry := model.ChildEntry{
 		Path:     childRel,
 		RepoName: meta.Name,
 	}
 	cf.Children = append(cf.Children, newEntry)
 
-	// 9. Save children.json
-	out, err := json.MarshalIndent(cf, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to encode children.json: %w", err)
-	}
-
-	if err := os.WriteFile(childrenPath, out, 0644); err != nil {
+	if err := fs.WriteJSON(childrenPath, cf); err != nil {
 		return fmt.Errorf("failed to save children.json: %w", err)
 	}
 
@@ -491,42 +506,31 @@ func (v *VersionControlV1) Link(childPath string) error {
 func (v *VersionControlV1) SuperCommit(message string, author string) error {
 	repoRoot := fs.GetCurrentDir()
 
-	// 1. Load own HEAD (self snapshot)
 	selfHead := readHEAD()
 	if selfHead == "" {
 		return errors.New("cannot create super commit: no commits yet in this repo")
 	}
 
-	// 2. Load children.json
 	childrenPath := filepath.Join(repoRoot, ".mrvc", childrenFileName)
 	cf := model.ChildrenFile{Children: []model.ChildEntry{}}
-
 	if fs.FileExists(childrenPath) {
-		data, err := os.ReadFile(childrenPath)
-		if err != nil {
-			return fmt.Errorf("failed to read children.json: %w", err)
-		}
-		if err := json.Unmarshal(data, &cf); err != nil {
+		if err := fs.ReadJSON(childrenPath, &cf); err != nil {
 			return fmt.Errorf("invalid children.json: %w", err)
 		}
 	}
 
-	// 3. Resolve each child
-	childRefs := make([]model.SuperCommitChildRef, 0)
-
+	childRefs := make([]model.SuperCommitChildRef, 0, len(cf.Children))
 	for _, child := range cf.Children {
 		childAbs := filepath.Join(repoRoot, child.Path)
 		childMrvc := filepath.Join(childAbs, ".mrvc")
 
-		// Validate MRVC folder
 		if !fs.IsDirPresent(childMrvc) {
 			return fmt.Errorf("child repo missing or corrupted: %s", child.Path)
 		}
 
-		// Validate repoName identity
 		var meta model.Metadata
 		if err := fs.ReadJSON(filepath.Join(childMrvc, "metadata.json"), &meta); err != nil {
-			return fmt.Errorf("failed to read metadata for child '%s'", child.Path)
+			return fmt.Errorf("failed to read metadata for child '%s': %w", child.Path, err)
 		}
 
 		if meta.Name != child.RepoName {
@@ -534,37 +538,31 @@ func (v *VersionControlV1) SuperCommit(message string, author string) error {
 				child.Path, child.RepoName, meta.Name)
 		}
 
-		// Read child's HEAD + HEAD_SUPER
 		childHead := func() string {
-			data, err := os.ReadFile(filepath.Join(childMrvc, "HEAD"))
+			b, err := os.ReadFile(filepath.Join(childMrvc, "HEAD"))
 			if err != nil {
 				return ""
 			}
-			return strings.TrimSpace(string(data))
+			return strings.TrimSpace(string(b))
 		}()
 
 		childSuper := func() string {
-			data, err := os.ReadFile(filepath.Join(childMrvc, "HEAD_SUPER"))
+			b, err := os.ReadFile(filepath.Join(childMrvc, "HEAD_SUPER"))
 			if err != nil {
 				return ""
 			}
-			return strings.TrimSpace(string(data))
+			return strings.TrimSpace(string(b))
 		}()
 
 		if childHead == "" {
 			return fmt.Errorf("child repo '%s' has no commits", child.Path)
 		}
 
-		// Resolve snapshot reference
-		ref := ""
-		refType := ""
-
+		ref := childHead
+		refType := "commit"
 		if childSuper != "" {
 			ref = childSuper
 			refType = "super"
-		} else {
-			ref = childHead
-			refType = "commit"
 		}
 
 		childRefs = append(childRefs, model.SuperCommitChildRef{
@@ -575,7 +573,6 @@ func (v *VersionControlV1) SuperCommit(message string, author string) error {
 		})
 	}
 
-	// 4. Build super commit object
 	superObj := model.SuperCommitObject{
 		SelfHead:  selfHead,
 		Children:  childRefs,
@@ -584,21 +581,52 @@ func (v *VersionControlV1) SuperCommit(message string, author string) error {
 		Timestamp: strconv.FormatInt(time.GetCurrentTimestamp(), 10),
 	}
 
-	// 5. Hash and save
 	hash, jsonBytes, err := HashSuperCommit(superObj)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to hash super commit: %w", err)
 	}
-
 	if err := SaveObject(hash, jsonBytes); err != nil {
-		return err
+		return fmt.Errorf("failed to save super commit object: %w", err)
 	}
 
-	// 6. Update HEAD_SUPER
 	if err := updateHEADSUPER(hash); err != nil {
-		return err
+		return fmt.Errorf("failed to update HEAD_SUPER: %w", err)
 	}
 
 	log.Println("Super commit created:", hash)
 	return nil
+}
+
+// ======================================================================
+// Helpers
+// ======================================================================
+
+func readHEAD() string {
+	b, err := os.ReadFile(filepath.Join(".mrvc", "HEAD"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+func updateHEAD(hash string) error {
+	if hash == "" {
+		return errors.New("empty hash")
+	}
+	return os.WriteFile(filepath.Join(".mrvc", "HEAD"), []byte(strings.TrimSpace(hash)), 0644)
+}
+
+func readHEADSUPER() string {
+	b, err := os.ReadFile(filepath.Join(".mrvc", "HEAD_SUPER"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+func updateHEADSUPER(hash string) error {
+	if hash == "" {
+		return errors.New("empty hash")
+	}
+	return os.WriteFile(filepath.Join(".mrvc", "HEAD_SUPER"), []byte(strings.TrimSpace(hash)), 0644)
 }

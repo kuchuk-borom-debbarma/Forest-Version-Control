@@ -30,7 +30,7 @@ CHILD_B="$ROOT/ChildB"
 CHILD_AA="$CHILD_A/ChildAA"
 
 # Create folder structure
-mkdir -p "$CHILD_AA" "$CHILD_A" "$CHILD_B" "$ROOT"
+mkdir -p "$ROOT" "$CHILD_A" "$CHILD_B" "$CHILD_AA"
 
 # Copy mrvc into all repos
 for repo in "$ROOT" "$CHILD_A" "$CHILD_B" "$CHILD_AA"; do
@@ -69,6 +69,7 @@ EOF
 EOF
 }
 
+# Create files
 create_repo_files "$ROOT" "RootRepo"
 create_repo_files "$CHILD_A" "ChildA"
 create_repo_files "$CHILD_B" "ChildB"
@@ -76,39 +77,83 @@ create_repo_files "$CHILD_AA" "ChildAA"
 
 echo "📁 Initializing all repos..."
 
-( cd "$ROOT" && ./mrvc init RootRepo "Builder Script" )
-( cd "$CHILD_A" && ./mrvc init ChildA "Builder Script" )
-( cd "$CHILD_B" && ./mrvc init ChildB "Builder Script" )
-( cd "$CHILD_AA" && ./mrvc init ChildAA "Builder Script" )
+(
+    cd "$ROOT"
+    ./mrvc init --name RootRepo --author "Builder Script"
+)
+
+(
+    cd "$CHILD_A"
+    ./mrvc init --name ChildA --author "Builder Script"
+)
+
+(
+    cd "$CHILD_B"
+    ./mrvc init --name ChildB --author "Builder Script"
+)
+
+(
+    cd "$CHILD_AA"
+    ./mrvc init --name ChildAA --author "Builder Script"
+)
 
 echo "🔗 Linking repos..."
 
-# RootRepo -> ChildA, ChildB
+# RootRepo -> ChildA + ChildB
 (
     cd "$ROOT"
-    ./mrvc link ChildA
-    ./mrvc link ChildB
+    ./mrvc link --path ChildA
+    ./mrvc link --path ChildB
 )
 
 # ChildA -> ChildAA
 (
     cd "$CHILD_A"
-    ./mrvc link ChildAA
+    ./mrvc link --path ChildAA
 )
 
 echo "📸 Performing first commits..."
 
-( cd "$ROOT"     && ./mrvc commit "first commit for RootRepo" "Builder Script" "*" )
-( cd "$CHILD_A"  && ./mrvc commit "first commit for ChildA"   "Builder Script" "*" )
-( cd "$CHILD_B"  && ./mrvc commit "first commit for ChildB"   "Builder Script" "*" )
-( cd "$CHILD_AA" && ./mrvc commit "first commit for ChildAA"  "Builder Script" "*" )
+(
+    cd "$ROOT"
+    ./mrvc commit --message "first commit for RootRepo" --author "Builder Script" --files "*"
+)
+
+(
+    cd "$CHILD_A"
+    ./mrvc commit --message "first commit for ChildA" --author "Builder Script" --files "*"
+)
+
+(
+    cd "$CHILD_B"
+    ./mrvc commit --message "first commit for ChildB" --author "Builder Script" --files "*"
+)
+
+(
+    cd "$CHILD_AA"
+    ./mrvc commit --message "first commit for ChildAA" --author "Builder Script" --files "*"
+)
+
+echo "🌲 Creating hierarchical super commits..."
+
+# SUPER COMMIT FOR ChildA → includes ChildAA
+(
+    cd "$CHILD_A"
+    ./mrvc super-commit --message "super commit for ChildA" --author "Builder Script"
+)
+
+# SUPER COMMIT FOR RootRepo → includes ChildA (super) + ChildB (commit)
+(
+    cd "$ROOT"
+    ./mrvc super-commit --message "super commit for RootRepo" --author "Builder Script"
+)
 
 echo ""
-echo "🎉 All repos initialized, linked, and committed!"
+echo "🎉 All repos initialized, linked, committed, and super committed!"
 echo "📂 Final Structure:"
 echo "RootRepo/"
-echo " ├── ChildA/"
-echo " │     └── ChildAA/"
-echo " └── ChildB/"
+echo " ├── ChildA/   (super committed)"
+echo " │     └── ChildAA/ (normal committed)"
+echo " └── ChildB/   (normal committed)"
 echo ""
-echo "🚀 Build complete."
+echo "🚀 Build complete!"
