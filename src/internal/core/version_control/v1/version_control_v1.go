@@ -399,7 +399,7 @@ func (v *VersionControlV1) Status() (string, error) {
 // Link establishes a link between the current repository and a child repository
 
 func (v *VersionControlV1) Link(childPath string) error {
-	// 1. Normalize child path
+	// 1. Validate & normalize child path
 	if childPath == "" {
 		return errors.New("child path cannot be empty")
 	}
@@ -412,29 +412,37 @@ func (v *VersionControlV1) Link(childPath string) error {
 		return fmt.Errorf("unable to resolve absolute path for '%s': %w", childPath, err)
 	}
 
-	// 3. Validate MRVC repo at child path
-	if !fs.IsDirPresent(filepath.Join(childAbs, ".mrvc")) {
+	// 3. Validate child is a proper MRVC repo
+	childMrvc := filepath.Join(childAbs, ".mrvc")
+	if !fs.IsDirPresent(childMrvc) {
 		return fmt.Errorf("'%s' is not an MRVC repository (missing .mrvc directory)", childAbs)
 	}
-	if !fs.FileExists(filepath.Join(childAbs, ".mrvc", "metadata.json")) {
+
+	metaPath := filepath.Join(childMrvc, "metadata.json")
+	if !fs.FileExists(metaPath) {
 		return fmt.Errorf("'%s' is not a valid MRVC repository (missing metadata.json)", childAbs)
 	}
 
-	// 4. Convert absolute child path → relative to parent
+	// 4. Load child's metadata to get repoName
+	var meta model.Metadata
+	if err := fs.ReadJSON(metaPath, &meta); err != nil {
+		return fmt.Errorf("failed to read child metadata.json: %w", err)
+	}
+
+	// 5. Child path must be inside parent
 	childRel, err := filepath.Rel(parentRoot, childAbs)
 	if err != nil {
-		return fmt.Errorf("unable to calculate relative path from %s to %s: %w",
-			parentRoot, childAbs, err)
+		return fmt.Errorf("unable to calculate relative path: %w", err)
 	}
-	childRel = filepath.ToSlash(childRel) // normalize to forward slashes
+	childRel = filepath.ToSlash(childRel)
 
 	if strings.HasPrefix(childRel, "../") {
 		return fmt.Errorf("child repo '%s' must be inside parent repo '%s'", childRel, parentRoot)
 	}
 
-	// 5. Load existing children.json, or create new struct
+	// 6. Load existing children.json
 	childrenPath := filepath.Join(parentRoot, ".mrvc", childrenFileName)
-	cf := model.ChildrenFile{Children: []string{}}
+	cf := model.ChildrenFile{Children: []model.ChildEntry{}}
 
 	if fs.FileExists(childrenPath) {
 		data, err := os.ReadFile(childrenPath)
@@ -446,17 +454,24 @@ func (v *VersionControlV1) Link(childPath string) error {
 		}
 	}
 
-	// 6. Prevent duplicates
+	// 7. Prevent duplicate repoName or duplicate path
 	for _, existing := range cf.Children {
-		if existing == childRel {
-			return fmt.Errorf("child '%s' is already linked", childRel)
+		if existing.Path == childRel {
+			return fmt.Errorf("child path '%s' is already linked", childRel)
+		}
+		if existing.RepoName == meta.Name {
+			return fmt.Errorf("child repoName '%s' is already linked", meta.Name)
 		}
 	}
 
-	// 7. Append new child
-	cf.Children = append(cf.Children, childRel)
+	// 8. Append new child entry
+	newEntry := model.ChildEntry{
+		Path:     childRel,
+		RepoName: meta.Name,
+	}
+	cf.Children = append(cf.Children, newEntry)
 
-	// 8. Write updated children.json
+	// 9. Save children.json
 	out, err := json.MarshalIndent(cf, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to encode children.json: %w", err)

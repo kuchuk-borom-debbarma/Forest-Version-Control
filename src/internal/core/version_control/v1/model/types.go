@@ -28,6 +28,11 @@ type CommitObject struct {
 	Timestamp string `json:"timestamp"`
 }
 
+type ChildEntry struct {
+	Path     string `json:"path"`
+	RepoName string `json:"repoName"`
+}
+
 type ChildrenFile struct {
-	Children []string `json:"children"`
+	Children []ChildEntry `json:"children"`
 }
