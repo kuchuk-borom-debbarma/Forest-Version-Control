@@ -27,3 +27,27 @@ type CommitObject struct {
 	Author    string `json:"author"`
 	Timestamp string `json:"timestamp"`
 }
+
+type ChildEntry struct {
+	Path     string `json:"path"`
+	RepoName string `json:"repoName"`
+}
+
+type ChildrenFile struct {
+	Children []ChildEntry `json:"children"`
+}
+
+type SuperCommitChildRef struct {
+	Path     string `json:"path"`
+	RepoName string `json:"repoName"`
+	Ref      string `json:"ref"`
+	Type     string `json:"type"` // "super" or "commit"
+}
+
+type SuperCommitObject struct {
+	SelfHead  string                `json:"self_head"`
+	Children  []SuperCommitChildRef `json:"children"`
+	Message   string                `json:"message"`
+	Author    string                `json:"author"`
+	Timestamp string                `json:"timestamp"`
+}

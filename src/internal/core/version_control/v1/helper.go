@@ -1,4 +1,4 @@
-package v1
+package constants
 
 import (
 	"MultiRepoVC/src/internal/core/version_control/v1/model"
@@ -8,7 +8,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // SaveObject OBJECT STORAGE
@@ -77,21 +76,6 @@ func addOrReplaceTreeEntry(tree model.TreeObject, entry model.TreeEntry) model.T
 	return tree
 }
 
-// HEAD HELPERS
-// readHEAD returns the current commit hash (or empty if no commits)
-// updateHEAD moves HEAD to a new commit
-func readHEAD() string {
-	data, err := os.ReadFile(".mrvc/HEAD")
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
-}
-
-func updateHEAD(hash string) error {
-	return os.WriteFile(".mrvc/HEAD", []byte(strings.TrimSpace(hash)), 0644)
-}
-
 // Recursively flattens a TreeObject into path → blobHash mapping
 func flattenTree(repoRoot, prefix string, tree model.TreeObject, out map[string]string) error {
 	for _, entry := range tree.Entries {
@@ -123,4 +107,13 @@ func flattenTree(repoRoot, prefix string, tree model.TreeObject, out map[string]
 		}
 	}
 	return nil
+}
+
+func HashSuperCommit(sc model.SuperCommitObject) (string, []byte, error) {
+	jsonBytes, err := json.Marshal(sc)
+	if err != nil {
+		return "", nil, err
+	}
+	h := sha256.Sum256(jsonBytes)
+	return hex.EncodeToString(h[:]), jsonBytes, nil
 }

@@ -22,84 +22,138 @@ GOOS=darwin \
 GOARCH=$GOARCH \
 go build -o build/mrvc ./src/cmd/mrvc
 
-echo "📁 Creating sensible testRepo..."
+echo "📁 Creating nested repo hierarchy..."
 
-TEST_REPO="build/testRepo"
-mkdir -p "$TEST_REPO/internal/math"
-mkdir -p "$TEST_REPO/pkg/greetings"
-mkdir -p "$TEST_REPO/assets"
+ROOT="build/RootRepo"
+CHILD_A="$ROOT/ChildA"
+CHILD_B="$ROOT/ChildB"
+CHILD_AA="$CHILD_A/ChildAA"
 
-# .mrvcignore
-cat > "$TEST_REPO/.mrvcignore" <<EOF
-# Ignore build artifacts
-build/
+# Create folder structure
+mkdir -p "$ROOT" "$CHILD_A" "$CHILD_B" "$CHILD_AA"
 
-# Ignore temporary files
+# Copy mrvc into all repos
+for repo in "$ROOT" "$CHILD_A" "$CHILD_B" "$CHILD_AA"; do
+    cp build/mrvc "$repo/mrvc"
+done
+
+# Function to create sample files
+create_repo_files() {
+    local REPO_PATH="$1"
+    local NAME="$2"
+
+    mkdir -p "$REPO_PATH/src"
+    mkdir -p "$REPO_PATH/assets"
+
+    cat > "$REPO_PATH/README.md" <<EOF
+# $NAME
+This is repository $NAME created for hierarchical MRVC testing.
+EOF
+
+    cat > "$REPO_PATH/src/module.go" <<EOF
+package src
+
+func Value() string {
+    return "Hello from $NAME"
+}
+EOF
+
+    cat > "$REPO_PATH/assets/sample.txt" <<EOF
+Asset file for $NAME.
+EOF
+
+    # default ignore rules
+    cat > "$REPO_PATH/.mrvcignore" <<EOF
 *.tmp
 *.log
-
-# Ignore Go vendor folder
-vendor/
-
-# Ignore macOS metadata files
-.DS_Store
 EOF
+}
 
-# README.md
-cat > "$TEST_REPO/README.md" <<EOF
-# TestRepo
+# Create files
+create_repo_files "$ROOT" "RootRepo"
+create_repo_files "$CHILD_A" "ChildA"
+create_repo_files "$CHILD_B" "ChildB"
+create_repo_files "$CHILD_AA" "ChildAA"
 
-A small example Go project used for testing the MultiRepoVC version control system.
-EOF
+echo "📁 Initializing all repos..."
 
-# app.go
-cat > "$TEST_REPO/app.go" <<EOF
-package main
-
-import (
-    "fmt"
-    "testRepo/internal/math"
-    "testRepo/pkg/greetings"
+(
+    cd "$ROOT"
+    ./mrvc init --name RootRepo --author "Builder Script"
 )
 
-func main() {
-    fmt.Println("Hello from TestRepo!")
-    fmt.Println("2 + 3 =", math.Add(2, 3))
-    fmt.Println(greetings.Hello("Kuku"))
-}
-EOF
+(
+    cd "$CHILD_A"
+    ./mrvc init --name ChildA --author "Builder Script"
+)
 
-# internal/math/add.go
-cat > "$TEST_REPO/internal/math/add.go" <<EOF
-package math
+(
+    cd "$CHILD_B"
+    ./mrvc init --name ChildB --author "Builder Script"
+)
 
-func Add(a, b int) int {
-    return a + b
-}
-EOF
+(
+    cd "$CHILD_AA"
+    ./mrvc init --name ChildAA --author "Builder Script"
+)
 
-# internal/math/multiply.go
-cat > "$TEST_REPO/internal/math/multiply.go" <<EOF
-package math
+echo "🔗 Linking repos..."
 
-func Multiply(a, b int) int {
-    return a * b
-}
-EOF
+# RootRepo -> ChildA + ChildB
+(
+    cd "$ROOT"
+    ./mrvc link --path ChildA
+    ./mrvc link --path ChildB
+)
 
-# pkg/greetings/hello.go
-cat > "$TEST_REPO/pkg/greetings/hello.go" <<EOF
-package greetings
+# ChildA -> ChildAA
+(
+    cd "$CHILD_A"
+    ./mrvc link --path ChildAA
+)
 
-func Hello(name string) string {
-    return "Hello, " + name + "!"
-}
-EOF
+echo "📸 Performing first commits..."
 
-# assets/sample.txt
-cat > "$TEST_REPO/assets/sample.txt" <<EOF
-This is a sample asset file for snapshot testing with MultiRepoVC.
-EOF
+(
+    cd "$ROOT"
+    ./mrvc commit --message "first commit for RootRepo" --author "Builder Script" --files "*"
+)
 
-echo "✅ testRepo created at build/testRepo/"
-echo "🎉 Build complete: build/mrvc"
+(
+    cd "$CHILD_A"
+    ./mrvc commit --message "first commit for ChildA" --author "Builder Script" --files "*"
+)
+
+(
+    cd "$CHILD_B"
+    ./mrvc commit --message "first commit for ChildB" --author "Builder Script" --files "*"
+)
+
+(
+    cd "$CHILD_AA"
+    ./mrvc commit --message "first commit for ChildAA" --author "Builder Script" --files "*"
+)
+
+echo "🌲 Creating hierarchical super commits..."
+
+# SUPER COMMIT FOR ChildA → includes ChildAA
+(
+    cd "$CHILD_A"
+    ./mrvc super-commit --message "super commit for ChildA" --author "Builder Script"
+)
+
+# SUPER COMMIT FOR RootRepo → includes ChildA (super) + ChildB (commit)
+(
+    cd "$ROOT"
+    ./mrvc super-commit --message "super commit for RootRepo" --author "Builder Script"
+)
+
+echo ""
+echo "🎉 All repos initialized, linked, committed, and super committed!"
+echo "📂 Final Structure:"
+echo "RootRepo/"
+echo " ├── ChildA/   (super committed)"
+echo " │     └── ChildAA/ (normal committed)"
+echo " └── ChildB/   (normal committed)"
+echo ""
+echo "🚀 Build complete!"

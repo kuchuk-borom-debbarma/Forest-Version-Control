@@ -33,3 +33,5 @@ func main() {
 		fmt.Println("Error:", err)
 	}
 }
+
+//Nested repo currently relies on file system. I want to design a system that does not rely on file system but that means having a "global" state for a collection of repo which will maintain contents and hierarchy of the repositories.
