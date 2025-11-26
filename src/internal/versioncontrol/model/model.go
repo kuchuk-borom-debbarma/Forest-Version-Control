@@ -5,3 +5,15 @@ type RepoMetadata struct {
 	Author    string
 	CreatedAt int64
 }
+
+type DirectoryTree struct {
+	Path    string
+	Parent  string
+	Entries []TreeEntry
+}
+
+type TreeEntry struct {
+	Name string
+	Type string
+	Hash string
+}
