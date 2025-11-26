@@ -17,3 +17,10 @@ type TreeEntry struct {
 	Type string
 	Hash string
 }
+
+type Commit struct {
+	Message  string
+	Author   string
+	Date     int64
+	TreeHash string
+}
