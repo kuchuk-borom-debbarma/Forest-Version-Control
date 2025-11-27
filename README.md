@@ -1,7 +1,3 @@
-Here is a polished README with **GitGroove** mentioned clearly at the very top, with a strong call-to-action and a clickable link placeholder.
-(You can replace the link with your actual GitGroove repo URL when ready.)
-
----
 
 # 🚨 Project Discontinued — Please Switch to **GitGroove**
 
